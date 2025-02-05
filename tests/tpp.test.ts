@@ -4,18 +4,18 @@ import { Cl } from "@stacks/transactions";
 const accounts = simnet.getAccounts();
 const donor1 = accounts.get("wallet_1")!;
 const donor2 = accounts.get("wallet_2")!;
+const cause = "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM";
 
 describe("Transparent Philanthropy Platform", () => {
     it("successfully makes a donation", () => {
         const donationAmount = 1000;
-        const cause = "Education Fund";
         
         const makeDonation = simnet.callPublicFn(
             "tpp",
             "make-donation",
             [
                 Cl.uint(donationAmount),
-                Cl.stringAscii(cause)
+                Cl.principal(cause)
             ],
             donor1
         );
@@ -28,14 +28,14 @@ describe("Transparent Philanthropy Platform", () => {
         simnet.callPublicFn(
             "tpp",
             "make-donation",
-            [Cl.uint(1000), Cl.stringAscii("Cause 1")],
+            [Cl.uint(1000), Cl.principal(cause)],
             donor1
         );
         
         simnet.callPublicFn(
             "tpp",
             "make-donation",
-            [Cl.uint(2000), Cl.stringAscii("Cause 2")],
+            [Cl.uint(2000), Cl.principal(cause)],
             donor1
         );
 
