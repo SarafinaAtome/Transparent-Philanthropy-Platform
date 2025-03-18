@@ -155,3 +155,122 @@
     )
     (ok true)
 ))
+
+(define-map categories 
+    uint 
+    {name: (string-ascii 64), description: (string-ascii 256)}
+)
+
+(define-data-var category-nonce uint u0)
+
+(define-public (create-category (name (string-ascii 64)) (description (string-ascii 256)))
+    (let ((cat-id (var-get category-nonce)))
+        (map-set categories cat-id
+            {name: name, description: description}
+        )
+        (var-set category-nonce (+ cat-id u1))
+        (ok cat-id)
+    )
+)
+
+(define-read-only (get-category (category-id uint))
+    (ok (map-get? categories category-id))
+)
+
+
+;; Add at top with other data maps
+(define-map donation-goals
+    uint
+    {target: uint, current: uint, title: (string-ascii 64), deadline: uint}
+)
+
+(define-data-var goal-nonce uint u0)
+
+(define-public (create-goal (target uint) (title (string-ascii 64)) (deadline uint))
+    (let ((goal-id (var-get goal-nonce)))
+        (map-set donation-goals goal-id
+            {target: target, current: u0, title: title, deadline: deadline}
+        )
+        (var-set goal-nonce (+ goal-id u1))
+        (ok goal-id)
+    )
+)
+
+(define-read-only (get-goal-progress (goal-id uint))
+    (ok (map-get? donation-goals goal-id))
+)
+
+
+;; Add at top with other data maps
+(define-map recurring-donations
+    uint
+    {donor: principal, amount: uint, cause: principal, interval: uint, last-donation: uint}
+)
+
+(define-data-var recurring-nonce uint u0)
+
+(define-public (setup-recurring-donation (amount uint) (cause principal) (interval uint))
+    (let ((donation-id (var-get recurring-nonce)))
+        (map-set recurring-donations donation-id
+            {
+                donor: tx-sender,
+                amount: amount,
+                cause: cause,
+                interval: interval,
+                last-donation: stacks-block-height
+            }
+        )
+        (var-set recurring-nonce (+ donation-id u1))
+        (ok donation-id)
+    )
+)
+
+(define-public (process-recurring-donation (donation-id uint))
+    (let (
+        (recurring (unwrap! (map-get? recurring-donations donation-id) (err u1)))
+        (current-height stacks-block-height)
+        (next-donation (+ (get last-donation recurring) (get interval recurring)))
+    )
+        (asserts! (>= current-height next-donation) (err u2))
+        (try! (stx-transfer? (get amount recurring) tx-sender (get cause recurring)))
+        (map-set recurring-donations donation-id
+            (merge recurring {last-donation: current-height})
+        )
+        (ok true)
+    )
+)
+
+;; Add at top with other data maps
+(define-map donation-reports
+    uint 
+    {
+        total-donations: uint,
+        unique-donors: uint,
+        largest-donation: uint,
+        last-updated: uint
+    }
+)
+
+(define-public (update-donation-report (report-id uint))
+    (let (
+        (current-report (default-to 
+            {total-donations: u0, unique-donors: u0, largest-donation: u0, last-updated: u0}
+            (map-get? donation-reports report-id)
+        ))
+    )
+        (map-set donation-reports report-id
+            (merge current-report 
+                {
+                    last-updated: stacks-block-height
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-donation-report (report-id uint))
+    (ok (map-get? donation-reports report-id))
+)
+
+
