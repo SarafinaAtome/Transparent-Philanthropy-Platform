@@ -274,3 +274,71 @@
 )
 
 
+
+(define-map milestone-achievements
+    uint 
+    {
+        threshold: uint,
+        name: (string-ascii 64),
+        token-uri: (string-utf8 256)
+    }
+)
+
+(define-map donor-achievements
+    { donor: principal, milestone-id: uint }
+    { achieved: bool }
+)
+
+(define-data-var milestone-nonce uint u0)
+
+(define-public (create-milestone (threshold uint) (name (string-ascii 64)) (token-uri (string-utf8 256)))
+    (let ((milestone-id (var-get milestone-nonce)))
+        (map-set milestone-achievements milestone-id
+            {
+                threshold: threshold,
+                name: name,
+                token-uri: token-uri
+            }
+        )
+        (var-set milestone-nonce (+ milestone-id u1))
+        (ok milestone-id)
+    )
+)
+
+
+(define-map impact-metrics
+    uint
+    {
+        donation-id: uint,
+        metric-name: (string-ascii 64),
+        value: uint,
+        description: (string-utf8 256),
+        timestamp: uint
+    }
+)
+
+(define-data-var impact-nonce uint u0)
+
+(define-public (record-impact (donation-id uint) (metric-name (string-ascii 64)) (value uint) (description (string-utf8 256)))
+    (let (
+        (impact-id (var-get impact-nonce))
+        (donation (unwrap! (map-get? donations {donation-id: donation-id}) (err u1)))
+    )
+        (asserts! (is-eq (get cause donation) tx-sender) (err u2))
+        (map-set impact-metrics impact-id
+            {
+                donation-id: donation-id,
+                metric-name: metric-name,
+                value: value,
+                description: description,
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set impact-nonce (+ impact-id u1))
+        (ok impact-id)
+    )
+)
+
+(define-read-only (get-donation-impact (donation-id uint))
+    (ok (map-get? impact-metrics donation-id))
+    )
