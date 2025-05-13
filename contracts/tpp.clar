@@ -342,3 +342,111 @@
 (define-read-only (get-donation-impact (donation-id uint))
     (ok (map-get? impact-metrics donation-id))
     )
+
+
+(define-map donation-bundles
+    uint 
+    {
+        donor: principal,
+        total-amount: uint,
+        allocations: (list 10 {cause: principal, percentage: uint})
+    }
+)
+
+(define-data-var bundle-nonce uint u0)
+
+(define-public (create-donation-bundle (total-amount uint) (allocations (list 10 {cause: principal, percentage: uint})))
+    (let 
+        ((bundle-id (var-get bundle-nonce))
+         (total-percentage (fold + (map get-percentage allocations) u0)))
+        
+        (asserts! (is-eq total-percentage u100) (err u1))
+        (try! (stx-transfer? total-amount tx-sender (as-contract tx-sender)))
+        
+        (map-set donation-bundles bundle-id
+            {
+                donor: tx-sender,
+                total-amount: total-amount,
+                allocations: allocations
+            }
+        )
+        (var-set bundle-nonce (+ bundle-id u1))
+        (ok bundle-id)
+    )
+)
+
+(define-private (get-percentage (allocation {cause: principal, percentage: uint}))
+    (get percentage allocation)
+)
+
+(define-public (execute-bundle (bundle-id uint))
+    (let 
+        ((bundle (unwrap! (map-get? donation-bundles bundle-id) (err u1))))
+        (try! (process-allocations (get allocations bundle) (get total-amount bundle)) )
+        (ok true)
+    )
+)
+
+(define-private (process-allocations (allocations (list 10 {cause: principal, percentage: uint})) (total-amount uint))
+    (begin 
+        (fold process-single-allocation allocations (ok total-amount))
+    )
+)
+
+(define-private (process-single-allocation (allocation {cause: principal, percentage: uint}) (result (response uint uint)))
+    (match result 
+        success (let 
+            ((amount (/ (* (get percentage allocation) success) u100)))
+            (try! (as-contract (stx-transfer? amount tx-sender (get cause allocation))))
+            (ok success)
+        )
+        error (err error)
+    )
+)
+
+
+(define-map verifiers principal bool)
+
+(define-map donation-verifications
+    uint
+    {
+        donation-id: uint,
+        verifier: principal,
+        status: (string-ascii 20),
+        verification-date: uint,
+        notes: (string-utf8 256)
+    }
+)
+
+(define-data-var verification-nonce uint u0)
+
+(define-public (register-verifier (verifier principal))
+    (begin
+        (asserts! (is-eq tx-sender tx-sender) (err u1))
+        (map-set verifiers verifier true)
+        (ok true)
+    )
+)
+
+(define-public (verify-donation (donation-id uint) (status (string-ascii 20)) (notes (string-utf8 256)))
+    (let 
+        ((verification-id (var-get verification-nonce)))
+        (asserts! (unwrap! (map-get? verifiers tx-sender) (err u1)) (err u2))
+        
+        (map-set donation-verifications verification-id
+            {
+                donation-id: donation-id,
+                verifier: tx-sender,
+                status: status,
+                verification-date: stacks-block-height,
+                notes: notes
+            }
+        )
+        (var-set verification-nonce (+ verification-id u1))
+        (ok verification-id)
+    )
+)
+
+(define-read-only (get-donation-verification (verification-id uint))
+    (ok (map-get? donation-verifications verification-id))
+)
