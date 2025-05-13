@@ -155,3 +155,298 @@
     )
     (ok true)
 ))
+
+(define-map categories 
+    uint 
+    {name: (string-ascii 64), description: (string-ascii 256)}
+)
+
+(define-data-var category-nonce uint u0)
+
+(define-public (create-category (name (string-ascii 64)) (description (string-ascii 256)))
+    (let ((cat-id (var-get category-nonce)))
+        (map-set categories cat-id
+            {name: name, description: description}
+        )
+        (var-set category-nonce (+ cat-id u1))
+        (ok cat-id)
+    )
+)
+
+(define-read-only (get-category (category-id uint))
+    (ok (map-get? categories category-id))
+)
+
+
+;; Add at top with other data maps
+(define-map donation-goals
+    uint
+    {target: uint, current: uint, title: (string-ascii 64), deadline: uint}
+)
+
+(define-data-var goal-nonce uint u0)
+
+(define-public (create-goal (target uint) (title (string-ascii 64)) (deadline uint))
+    (let ((goal-id (var-get goal-nonce)))
+        (map-set donation-goals goal-id
+            {target: target, current: u0, title: title, deadline: deadline}
+        )
+        (var-set goal-nonce (+ goal-id u1))
+        (ok goal-id)
+    )
+)
+
+(define-read-only (get-goal-progress (goal-id uint))
+    (ok (map-get? donation-goals goal-id))
+)
+
+
+;; Add at top with other data maps
+(define-map recurring-donations
+    uint
+    {donor: principal, amount: uint, cause: principal, interval: uint, last-donation: uint}
+)
+
+(define-data-var recurring-nonce uint u0)
+
+(define-public (setup-recurring-donation (amount uint) (cause principal) (interval uint))
+    (let ((donation-id (var-get recurring-nonce)))
+        (map-set recurring-donations donation-id
+            {
+                donor: tx-sender,
+                amount: amount,
+                cause: cause,
+                interval: interval,
+                last-donation: stacks-block-height
+            }
+        )
+        (var-set recurring-nonce (+ donation-id u1))
+        (ok donation-id)
+    )
+)
+
+(define-public (process-recurring-donation (donation-id uint))
+    (let (
+        (recurring (unwrap! (map-get? recurring-donations donation-id) (err u1)))
+        (current-height stacks-block-height)
+        (next-donation (+ (get last-donation recurring) (get interval recurring)))
+    )
+        (asserts! (>= current-height next-donation) (err u2))
+        (try! (stx-transfer? (get amount recurring) tx-sender (get cause recurring)))
+        (map-set recurring-donations donation-id
+            (merge recurring {last-donation: current-height})
+        )
+        (ok true)
+    )
+)
+
+;; Add at top with other data maps
+(define-map donation-reports
+    uint 
+    {
+        total-donations: uint,
+        unique-donors: uint,
+        largest-donation: uint,
+        last-updated: uint
+    }
+)
+
+(define-public (update-donation-report (report-id uint))
+    (let (
+        (current-report (default-to 
+            {total-donations: u0, unique-donors: u0, largest-donation: u0, last-updated: u0}
+            (map-get? donation-reports report-id)
+        ))
+    )
+        (map-set donation-reports report-id
+            (merge current-report 
+                {
+                    last-updated: stacks-block-height
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-donation-report (report-id uint))
+    (ok (map-get? donation-reports report-id))
+)
+
+
+
+(define-map milestone-achievements
+    uint 
+    {
+        threshold: uint,
+        name: (string-ascii 64),
+        token-uri: (string-utf8 256)
+    }
+)
+
+(define-map donor-achievements
+    { donor: principal, milestone-id: uint }
+    { achieved: bool }
+)
+
+(define-data-var milestone-nonce uint u0)
+
+(define-public (create-milestone (threshold uint) (name (string-ascii 64)) (token-uri (string-utf8 256)))
+    (let ((milestone-id (var-get milestone-nonce)))
+        (map-set milestone-achievements milestone-id
+            {
+                threshold: threshold,
+                name: name,
+                token-uri: token-uri
+            }
+        )
+        (var-set milestone-nonce (+ milestone-id u1))
+        (ok milestone-id)
+    )
+)
+
+
+(define-map impact-metrics
+    uint
+    {
+        donation-id: uint,
+        metric-name: (string-ascii 64),
+        value: uint,
+        description: (string-utf8 256),
+        timestamp: uint
+    }
+)
+
+(define-data-var impact-nonce uint u0)
+
+(define-public (record-impact (donation-id uint) (metric-name (string-ascii 64)) (value uint) (description (string-utf8 256)))
+    (let (
+        (impact-id (var-get impact-nonce))
+        (donation (unwrap! (map-get? donations {donation-id: donation-id}) (err u1)))
+    )
+        (asserts! (is-eq (get cause donation) tx-sender) (err u2))
+        (map-set impact-metrics impact-id
+            {
+                donation-id: donation-id,
+                metric-name: metric-name,
+                value: value,
+                description: description,
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set impact-nonce (+ impact-id u1))
+        (ok impact-id)
+    )
+)
+
+(define-read-only (get-donation-impact (donation-id uint))
+    (ok (map-get? impact-metrics donation-id))
+    )
+
+
+(define-map donation-bundles
+    uint 
+    {
+        donor: principal,
+        total-amount: uint,
+        allocations: (list 10 {cause: principal, percentage: uint})
+    }
+)
+
+(define-data-var bundle-nonce uint u0)
+
+(define-public (create-donation-bundle (total-amount uint) (allocations (list 10 {cause: principal, percentage: uint})))
+    (let 
+        ((bundle-id (var-get bundle-nonce))
+         (total-percentage (fold + (map get-percentage allocations) u0)))
+        
+        (asserts! (is-eq total-percentage u100) (err u1))
+        (try! (stx-transfer? total-amount tx-sender (as-contract tx-sender)))
+        
+        (map-set donation-bundles bundle-id
+            {
+                donor: tx-sender,
+                total-amount: total-amount,
+                allocations: allocations
+            }
+        )
+        (var-set bundle-nonce (+ bundle-id u1))
+        (ok bundle-id)
+    )
+)
+
+(define-private (get-percentage (allocation {cause: principal, percentage: uint}))
+    (get percentage allocation)
+)
+
+(define-public (execute-bundle (bundle-id uint))
+    (let 
+        ((bundle (unwrap! (map-get? donation-bundles bundle-id) (err u1))))
+        (try! (process-allocations (get allocations bundle) (get total-amount bundle)) )
+        (ok true)
+    )
+)
+
+(define-private (process-allocations (allocations (list 10 {cause: principal, percentage: uint})) (total-amount uint))
+    (begin 
+        (fold process-single-allocation allocations (ok total-amount))
+    )
+)
+
+(define-private (process-single-allocation (allocation {cause: principal, percentage: uint}) (result (response uint uint)))
+    (match result 
+        success (let 
+            ((amount (/ (* (get percentage allocation) success) u100)))
+            (try! (as-contract (stx-transfer? amount tx-sender (get cause allocation))))
+            (ok success)
+        )
+        error (err error)
+    )
+)
+
+
+(define-map verifiers principal bool)
+
+(define-map donation-verifications
+    uint
+    {
+        donation-id: uint,
+        verifier: principal,
+        status: (string-ascii 20),
+        verification-date: uint,
+        notes: (string-utf8 256)
+    }
+)
+
+(define-data-var verification-nonce uint u0)
+
+(define-public (register-verifier (verifier principal))
+    (begin
+        (asserts! (is-eq tx-sender tx-sender) (err u1))
+        (map-set verifiers verifier true)
+        (ok true)
+    )
+)
+
+(define-public (verify-donation (donation-id uint) (status (string-ascii 20)) (notes (string-utf8 256)))
+    (let 
+        ((verification-id (var-get verification-nonce)))
+        (asserts! (unwrap! (map-get? verifiers tx-sender) (err u1)) (err u2))
+        
+        (map-set donation-verifications verification-id
+            {
+                donation-id: donation-id,
+                verifier: tx-sender,
+                status: status,
+                verification-date: stacks-block-height,
+                notes: notes
+            }
+        )
+        (var-set verification-nonce (+ verification-id u1))
+        (ok verification-id)
+    )
+)
+
+(define-read-only (get-donation-verification (verification-id uint))
+    (ok (map-get? donation-verifications verification-id))
+)
