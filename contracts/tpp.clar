@@ -450,3 +450,133 @@
 (define-read-only (get-donation-verification (verification-id uint))
     (ok (map-get? donation-verifications verification-id))
 )
+
+
+(define-map escrow-agreements
+    uint
+    {
+        donation-id: uint,
+        arbiter: principal,
+        conditions: (string-utf8 512),
+        deadline: uint,
+        status: (string-ascii 20),
+        created-at: uint
+    }
+)
+
+(define-map escrow-votes
+    {agreement-id: uint, voter: principal}
+    {vote: bool, timestamp: uint}
+)
+
+(define-data-var escrow-nonce uint u0)
+
+(define-public (create-escrow-donation (amount uint) (cause principal) (arbiter principal) (conditions (string-utf8 512)) (deadline uint))
+    (let 
+        ((donation-id (var-get donation-nonce))
+         (escrow-id (var-get escrow-nonce)))
+        
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        
+        (map-set donations
+            {donation-id: donation-id}
+            {
+                donor: tx-sender,
+                amount: amount,
+                cause: cause,
+                status: "escrowed"
+            }
+        )
+        
+        (map-set escrow-agreements escrow-id
+            {
+                donation-id: donation-id,
+                arbiter: arbiter,
+                conditions: conditions,
+                deadline: deadline,
+                status: "active",
+                created-at: stacks-block-height
+            }
+        )
+        
+        (var-set donation-nonce (+ donation-id u1))
+        (var-set escrow-nonce (+ escrow-id u1))
+        (ok escrow-id)
+    )
+)
+
+(define-public (vote-escrow-release (agreement-id uint) (approve bool))
+    (let 
+        ((agreement (unwrap! (map-get? escrow-agreements agreement-id) (err u1)))
+         (donation (unwrap! (map-get? donations {donation-id: (get donation-id agreement)}) (err u2))))
+        
+        (asserts! (is-eq (get status agreement) "active") (err u3))
+        (asserts! (or (is-eq tx-sender (get donor donation)) 
+                     (is-eq tx-sender (get arbiter agreement))) (err u4))
+        
+        (map-set escrow-votes 
+            {agreement-id: agreement-id, voter: tx-sender}
+            {vote: approve, timestamp: stacks-block-height}
+        )
+        (ok true)
+    )
+)
+
+(define-public (execute-escrow-release (agreement-id uint))
+    (let 
+        ((agreement (unwrap! (map-get? escrow-agreements agreement-id) (err u1)))
+         (donation (unwrap! (map-get? donations {donation-id: (get donation-id agreement)}) (err u2)))
+         (donor-vote (map-get? escrow-votes {agreement-id: agreement-id, voter: (get donor donation)}))
+         (arbiter-vote (map-get? escrow-votes {agreement-id: agreement-id, voter: (get arbiter agreement)})))
+        
+        (asserts! (is-eq (get status agreement) "active") (err u3))
+        (asserts! (< stacks-block-height (get deadline agreement)) (err u4))
+        
+        (asserts! (and 
+            (is-some donor-vote)
+            (is-some arbiter-vote)
+            (get vote (unwrap-panic donor-vote))
+            (get vote (unwrap-panic arbiter-vote))) (err u5))
+        
+        (try! (as-contract (stx-transfer? (get amount donation) (as-contract tx-sender) (get cause donation))))
+        
+        (map-set escrow-agreements agreement-id
+            (merge agreement {status: "released"}))
+        
+        (map-set donations 
+            {donation-id: (get donation-id agreement)}
+            (merge donation {status: "released"}))
+        
+        (ok true)
+    )
+)
+
+(define-public (cancel-escrow (agreement-id uint))
+    (let 
+        ((agreement (unwrap! (map-get? escrow-agreements agreement-id) (err u1)))
+         (donation (unwrap! (map-get? donations {donation-id: (get donation-id agreement)}) (err u2))))
+        
+        (asserts! (is-eq (get status agreement) "active") (err u3))
+        (asserts! (or (>= stacks-block-height (get deadline agreement))
+                     (is-eq tx-sender (get donor donation))) (err u4))
+        
+        (try! (as-contract (stx-transfer? (get amount donation) (as-contract tx-sender) (get donor donation))))
+        
+        (map-set escrow-agreements agreement-id
+            (merge agreement {status: "cancelled"}))
+        
+        (map-set donations 
+            {donation-id: (get donation-id agreement)}
+            (merge donation {status: "refunded"}))
+        
+        (ok true)
+    )
+)
+
+(define-read-only (get-escrow-agreement (agreement-id uint))
+    (ok (map-get? escrow-agreements agreement-id))
+)
+
+(define-read-only (get-escrow-vote (agreement-id uint) (voter principal))
+    (ok (map-get? escrow-votes {agreement-id: agreement-id, voter: voter}))
+)
