@@ -12,6 +12,30 @@
     }
 )
 
+(define-map donor-leaderboard
+    principal
+    {
+        total-donated: uint,
+        donation-count: uint,
+        last-donation: uint,
+        engagement-score: uint,
+        rank: uint
+    }
+)
+
+(define-map leaderboard-rewards
+    uint
+    {
+        reward-pool: uint,
+        top-donors: (list 10 principal),
+        distribution-date: uint,
+        status: (string-ascii 20)
+    }
+)
+
+(define-data-var reward-period-nonce uint u0)
+(define-data-var current-leaderboard-size uint u0)
+
 (define-map donation-counts principal uint)
 
 ;; Data Variables
@@ -579,4 +603,113 @@
 
 (define-read-only (get-escrow-vote (agreement-id uint) (voter principal))
     (ok (map-get? escrow-votes {agreement-id: agreement-id, voter: voter}))
+)
+
+
+
+
+(define-public (update-leaderboard-entry (donor principal) (amount uint))
+    (let 
+        ((current-entry (default-to 
+            {total-donated: u0, donation-count: u0, last-donation: u0, engagement-score: u0, rank: u0}
+            (map-get? donor-leaderboard donor)))
+         (new-total (+ (get total-donated current-entry) amount))
+         (new-count (+ (get donation-count current-entry) u1))
+         (recency-bonus (if (< (- stacks-block-height (get last-donation current-entry)) u144) u10 u0))
+         (new-score (+ (* new-total u2) (* new-count u5) recency-bonus)))
+        
+        (map-set donor-leaderboard donor
+            {
+                total-donated: new-total,
+                donation-count: new-count,
+                last-donation: stacks-block-height,
+                engagement-score: new-score,
+                rank: u0
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-public (create-reward-pool (pool-amount uint))
+    (let 
+        ((period-id (var-get reward-period-nonce)))
+        (try! (stx-transfer? pool-amount tx-sender (as-contract tx-sender)))
+        (map-set leaderboard-rewards period-id
+            {
+                reward-pool: pool-amount,
+                top-donors: (list),
+                distribution-date: (+ stacks-block-height u1008),
+                status: "active"
+            }
+        )
+        (var-set reward-period-nonce (+ period-id u1))
+        (ok period-id)
+    )
+)
+
+(define-public (finalize-leaderboard-period (period-id uint) (top-donors (list 10 principal)))
+    (let 
+        ((reward-info (unwrap! (map-get? leaderboard-rewards period-id) (err u1))))
+        (asserts! (is-eq (get status reward-info) "active") (err u2))
+        (asserts! (>= stacks-block-height (get distribution-date reward-info)) (err u3))
+        
+        (map-set leaderboard-rewards period-id
+            (merge reward-info 
+                {
+                    top-donors: top-donors,
+                    status: "finalized"
+                }
+            )
+        )
+        (ok true)
+    )
+)
+
+(define-public (claim-leaderboard-reward (period-id uint) (position uint))
+    (let 
+        ((reward-info (unwrap! (map-get? leaderboard-rewards period-id) (err u1)))
+         (top-donors (get top-donors reward-info))
+         (total-pool (get reward-pool reward-info))
+         (reward-amount (get-reward-by-position position total-pool)))
+        
+        (asserts! (is-eq (get status reward-info) "finalized") (err u2))
+        (asserts! (< position (len top-donors)) (err u3))
+        (asserts! (is-eq tx-sender (unwrap! (element-at top-donors position) (err u4))) (err u5))
+        
+        (try! (as-contract (stx-transfer? reward-amount (as-contract tx-sender) tx-sender)))
+        (ok reward-amount)
+    )
+)
+
+(define-private (get-reward-by-position (position uint) (total-pool uint))
+    (if (is-eq position u0)
+        (/ (* total-pool u50) u100)
+        (if (is-eq position u1)
+            (/ (* total-pool u30) u100)
+            (if (is-eq position u2)
+                (/ (* total-pool u20) u100)
+                (/ total-pool u10)
+            )
+        )
+    )
+)
+
+(define-read-only (get-donor-leaderboard-entry (donor principal))
+    (ok (map-get? donor-leaderboard donor))
+)
+
+(define-read-only (get-reward-period-info (period-id uint))
+    (ok (map-get? leaderboard-rewards period-id))
+)
+
+(define-read-only (calculate-engagement-score (donor principal))
+    (let 
+        ((entry (unwrap! (map-get? donor-leaderboard donor) (err u1)))
+         (total-donated (get total-donated entry))
+         (donation-count (get donation-count entry))
+         (last-donation (get last-donation entry))
+         (recency-bonus (if (< (- stacks-block-height last-donation) u144) u10 u0)))
+        (ok (+ (* total-donated u2) (* donation-count u5) recency-bonus))
+    )
 )
