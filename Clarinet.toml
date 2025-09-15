@@ -9,6 +9,16 @@ requirements = []
 path = 'contracts/tpp.clar'
 clarity_version = 3
 epoch = 3.1
+
+[contracts.donor-feedback]
+path = 'contracts/donor-feedback.clar'
+clarity_version = 3
+epoch = 3.1
+
+[contracts.donation-challenges]
+path = 'contracts/donation-challenges.clar'
+clarity_version = 3
+epoch = 3.1
 [repl.analysis]
 passes = ['check_checker']
 
